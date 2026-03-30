@@ -405,124 +405,50 @@ class DailyProcessor:
                     result["cash"] = self.portfolio.cash
                     continue
 
-            if date != pos.open_date:
-                if should_hedge(abs(pos_delta), self.config.delta_hedge_threshold):
-                    # If there's an existing open hedge, close it first
-                    if (
-                        pos.hedge_records
-                        and pos.hedge_records[-1].get("exit_date") is None
-                    ):
-                        pos.close_current_hedge(
-                            date,
-                            s,
-                            self.config.etf_commission,
-                            self.config.etf_handling_fee,
-                            self.config.etf_min_commission,
-                            self.config.etf_slippage,
-                        )
-                    # Then open a NEW hedge targeting full delta neutrality
-                    hedge_qty, hedge_cost, hedge_total_cost = hedge_delta_to_zero(
-                        current_delta=pos_delta,
-                        etf_price=s,
-                        etf_min_commission=self.config.etf_min_commission,
-                        etf_commission=self.config.etf_commission,
-                        etf_handling_fee=self.config.etf_handling_fee,
-                        etf_slippage=self.config.etf_slippage,
+            # First hedge block - hedge existing positions (on non-open dates)
+            # FIX: Removed "date != pos.open_date" to allow hedging on open date
+            if should_hedge(abs(pos_delta), self.config.delta_hedge_threshold):
+                # If there's an existing open hedge, close it first
+                if pos.hedge_records and pos.hedge_records[-1].get("exit_date") is None:
+                    pos.close_current_hedge(
+                        date,
+                        s,
+                        self.config.etf_commission,
+                        self.config.etf_handling_fee,
+                        self.config.etf_min_commission,
+                        self.config.etf_slippage,
                     )
-                    if hedge_qty != 0:
-                        slippage_factor = (
-                            1 + self.config.etf_slippage
-                            if hedge_qty > 0
-                            else 1 - self.config.etf_slippage
-                        )
-                        exec_price = s * slippage_factor
-                        pos.add_hedge_record(
-                            date, hedge_qty, exec_price, hedge_total_cost
-                        )
-                        result["hedges"].append(
-                            {
-                                "trade_id": pos.trade_id,
-                                "date": date,
-                                "qty": hedge_qty,
-                                "price": exec_price,
-                                "cost": hedge_total_cost,
-                            }
-                        )
-                        result["equity"] = self.portfolio.total_equity()
-                        result["cash"] = self.portfolio.cash
-                    continue
-
-            s = underlying
-            strike = float(pos.strike_price)
-            t_raw = dte
-            t = max(t_raw, 1) / 252.0
-
-            call_iv = self._compute_iv_for_position(date, strike, t_raw)
-            if call_iv <= 0:
-                logger.warning(
-                    f"IV fallback: pos_id={pos.trade_id} date={date} strike={strike} "
-                    f"dte={t_raw} falling back to 0.20"
+                # Then open a NEW hedge targeting full delta neutrality
+                hedge_qty, hedge_cost, hedge_total_cost = hedge_delta_to_zero(
+                    current_delta=pos_delta,
+                    etf_price=s,
+                    etf_min_commission=self.config.etf_min_commission,
+                    etf_commission=self.config.etf_commission,
+                    etf_handling_fee=self.config.etf_handling_fee,
+                    etf_slippage=self.config.etf_slippage,
                 )
-                call_iv = 0.20
-            put_iv = call_iv
-
-            if t > 0:
-                call_greeks = black_scholes_greeks(
-                    s, strike, t, self.config.risk_free_rate, call_iv, "C"
-                )
-                put_greeks = black_scholes_greeks(
-                    s, strike, t, self.config.risk_free_rate, put_iv, "P"
-                )
-
-                pos_delta = (call_greeks["delta"] + put_greeks["delta"]) * 10000
-                pos_gamma = (call_greeks["gamma"] + put_greeks["gamma"]) * 10000
-                pos_vega = (call_greeks["vega"] + put_greeks["vega"]) * 10000
-                pos_theta = (call_greeks["theta"] + put_greeks["theta"]) * 10000
-
-                pos.add_daily_greeks(date, pos_delta, pos_gamma, pos_vega, pos_theta)
-
-                if date != pos.open_date:
-                    if should_hedge(abs(pos_delta), self.config.delta_hedge_threshold):
-                        # If there's an existing open hedge, close it first
-                        if (
-                            pos.hedge_records
-                            and pos.hedge_records[-1].get("exit_date") is None
-                        ):
-                            pos.close_current_hedge(
-                                date,
-                                s,
-                                self.config.etf_commission,
-                                self.config.etf_handling_fee,
-                                self.config.etf_min_commission,
-                                self.config.etf_slippage,
-                            )
-                        # Then open a NEW hedge targeting full delta neutrality
-                        hedge_qty, hedge_cost, hedge_total_cost = hedge_delta_to_zero(
-                            current_delta=pos_delta,
-                            etf_price=s,
-                            etf_min_commission=self.config.etf_min_commission,
-                            etf_commission=self.config.etf_commission,
-                            etf_handling_fee=self.config.etf_handling_fee,
-                            etf_slippage=self.config.etf_slippage,
-                        )
-                        if hedge_qty != 0:
-                            slippage_factor = (
-                                1 + self.config.etf_slippage
-                                if hedge_qty > 0
-                                else 1 - self.config.etf_slippage
-                            )
-                            exec_price = s * slippage_factor
-                            pos.add_hedge_record(
-                                date, hedge_qty, exec_price, hedge_total_cost
-                            )
-                            result["hedges"].append(
-                                {
-                                    "trade_id": pos.trade_id,
-                                    "date": date,
-                                    "qty": hedge_qty,
-                                    "price": exec_price,
-                                }
-                            )
+                if hedge_qty != 0:
+                    slippage_factor = (
+                        1 + self.config.etf_slippage
+                        if hedge_qty > 0
+                        else 1 - self.config.etf_slippage
+                    )
+                    exec_price = s * slippage_factor
+                    pos.add_hedge_record(date, hedge_qty, exec_price, hedge_total_cost)
+                    result["hedges"].append(
+                        {
+                            "trade_id": pos.trade_id,
+                            "date": date,
+                            "qty": hedge_qty,
+                            "price": exec_price,
+                            "cost": hedge_total_cost,
+                        }
+                    )
+                    result["equity"] = self.portfolio.total_equity()
+                    result["cash"] = self.portfolio.cash
+                # Always update post-hedge delta after hedge decision/execution
+                post_hedge_delta = pos_delta + pos.net_hedge_qty
+                pos.update_last_daily_greeks_post_hedge(post_hedge_delta)
 
         result["equity"] = self.portfolio.total_equity()
         result["cash"] = self.portfolio.cash
