@@ -407,6 +407,20 @@ class DailyProcessor:
 
             if date != pos.open_date:
                 if should_hedge(abs(pos_delta), self.config.delta_hedge_threshold):
+                    # If there's an existing open hedge, close it first
+                    if (
+                        pos.hedge_records
+                        and pos.hedge_records[-1].get("exit_date") is None
+                    ):
+                        pos.close_current_hedge(
+                            date,
+                            s,
+                            self.config.etf_commission,
+                            self.config.etf_handling_fee,
+                            self.config.etf_min_commission,
+                            self.config.etf_slippage,
+                        )
+                    # Then open a NEW hedge targeting full delta neutrality
                     hedge_qty, hedge_cost, hedge_total_cost = hedge_delta_to_zero(
                         current_delta=pos_delta,
                         etf_price=s,
@@ -469,6 +483,20 @@ class DailyProcessor:
 
                 if date != pos.open_date:
                     if should_hedge(abs(pos_delta), self.config.delta_hedge_threshold):
+                        # If there's an existing open hedge, close it first
+                        if (
+                            pos.hedge_records
+                            and pos.hedge_records[-1].get("exit_date") is None
+                        ):
+                            pos.close_current_hedge(
+                                date,
+                                s,
+                                self.config.etf_commission,
+                                self.config.etf_handling_fee,
+                                self.config.etf_min_commission,
+                                self.config.etf_slippage,
+                            )
+                        # Then open a NEW hedge targeting full delta neutrality
                         hedge_qty, hedge_cost, hedge_total_cost = hedge_delta_to_zero(
                             current_delta=pos_delta,
                             etf_price=s,

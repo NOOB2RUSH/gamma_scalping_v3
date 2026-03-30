@@ -29,7 +29,8 @@ class Position:
     hedge_records: list = field(default_factory=list)
     daily_greeks: list = field(default_factory=list)
     net_hedge_qty: float = 0.0
-    hedge_cost: float = 0.0
+    hedge_cost: float = 0.0  # Legacy: total costs (both open + close)
+    hedge_opening_cost: float = 0.0  # Only opening costs to deduct at close
     hedge_pnl: float = 0.0
 
     def holding_days(self, current_date: str) -> int:
@@ -42,7 +43,60 @@ class Position:
             {"date": date, "qty": qty, "price": price, "pnl": 0.0}
         )
         self.net_hedge_qty += qty
-        self.hedge_cost += abs(cost)
+        # Track opening costs separately from closing costs
+        # Opening costs will be deducted when position closes
+        # Closing costs are deducted in realized_pnl via close_current_hedge()
+        self.hedge_opening_cost += abs(cost)
+
+    def close_current_hedge(
+        self,
+        exit_date: str,
+        exit_price: float,
+        etf_commission: float,
+        etf_handling_fee: float,
+        etf_min_commission: float,
+        etf_slippage: float,
+    ):
+        """Close the most recent open hedge at exit_price, compute realized PnL.
+
+        Note: entry_price already includes slippage from when the hedge was opened.
+        Exit slippage should be applied because when selling, we receive bid (lower) not mid.
+        """
+        if not self.hedge_records:
+            return
+        # Find the last hedge without exit_date
+        for rec in reversed(self.hedge_records):
+            if rec.get("exit_date") is None:
+                rec["exit_date"] = exit_date
+
+                # Calculate realized PnL for this hedge
+                qty = rec["qty"]
+                entry_price = rec["price"]
+
+                # Apply slippage to exit price (opposite direction of entry)
+                # Entry: buy at s*(1+slippage) or sell at s*(1-slippage)
+                # Exit: opposite direction - sell at s*(1-slippage) or buy at s*(1+slippage)
+                if qty > 0:
+                    # We bought hedge (long ETF), now selling - receive bid (lower)
+                    exit_exec_price = exit_price * (1 - etf_slippage)
+                else:
+                    # We sold hedge (short ETF), now buying - pay ask (higher)
+                    exit_exec_price = exit_price * (1 + etf_slippage)
+
+                rec["exit_price"] = exit_exec_price
+
+                pnl = qty * (exit_exec_price - entry_price)
+                # Subtract transaction costs
+                notional = abs(qty) * exit_exec_price
+                commission = max(notional * etf_commission, etf_min_commission)
+                handling = notional * etf_handling_fee
+                pnl -= commission + handling
+
+                rec["realized_pnl"] = pnl
+                # NOTE: closing costs already deducted from realized_pnl above
+                # Do NOT add to hedge_cost here to avoid double-deduction
+                self.net_hedge_qty -= qty  # Remove this hedge's qty from net
+                break
 
     def add_daily_greeks(
         self, date: str, delta: float, gamma: float, vega: float, theta: float

@@ -50,20 +50,43 @@ class TestClosePosition:
         so including hedge_mtm in net_pnl would cause total_realized_pnl
         to diverge from equity_change (which only tracks actual cash).
         Hedge contribution is available via pos.hedge_pnl field.
+
+        When close_current_hedge() is used, realized_pnl is computed
+        and used in close_position() instead of MTM to final close price.
         """
         p = Portfolio(1_000_000)
         call = OptionLeg("1000001", 2.55, "2025-01-22", "C", 0.1)
         put = OptionLeg("1000002", 2.55, "2025-01-22", "P", 0.09)
         pos = p.open_position("2024-12-16", 2.55, "2025-01-22", call, put, 1900.0)
+
+        # Scenario 1: close_current_hedge() sets realized_pnl
         pos.add_hedge_record("2024-12-17", -4000, 2.55, 0.0)
+        # Simulate closing hedge via close_current_hedge at price 2.58
+        pos.close_current_hedge(
+            exit_date="2024-12-18",
+            exit_price=2.58,
+            etf_commission=0.0003,
+            etf_handling_fee=0.0001,
+            etf_min_commission=1.0,
+            etf_slippage=0.001,
+        )
+        # realized_pnl should be set
+        assert pos.hedge_records[0].get("realized_pnl") is not None
+        assert pos.hedge_records[0]["exit_date"] == "2024-12-18"
+        # exit_price now includes slippage applied (for short hedge qty<0, exit price is higher due to buying)
+        assert pos.hedge_records[0]["exit_price"] == pytest.approx(2.58258, abs=1e-5)
+
+        # Scenario 2: close_position uses realized_pnl from close_current_hedge
         underlying_close_price = 2.60
         net_pnl = p.close_position(
             pos.trade_id, "2024-12-20", 2000.0, underlying_close_price
         )
         # net_pnl = option_pnl only (close_proceeds - open_cost)
         assert net_pnl == pytest.approx(100.0, abs=1e-6)
-        # hedge_pnl is tracked separately (not added to net_pnl)
-        assert pos.hedge_pnl == pytest.approx(-200.0, abs=1e-6)
+        # hedge_pnl comes from realized_pnl, not MTM to underlying_close_price
+        assert pos.hedge_pnl == pytest.approx(
+            pos.hedge_records[0]["realized_pnl"], abs=1e-6
+        )
 
 
 class TestGetOpenPositions:
