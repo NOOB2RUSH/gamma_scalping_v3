@@ -99,7 +99,13 @@ class Position:
                 break
 
     def add_daily_greeks(
-        self, date: str, delta: float, gamma: float, vega: float, theta: float
+        self,
+        date: str,
+        delta: float,
+        gamma: float,
+        vega: float,
+        theta: float,
+        post_hedge_delta: Optional[float] = None,
     ):
         self.daily_greeks.append(
             {
@@ -108,8 +114,14 @@ class Position:
                 "gamma": gamma,
                 "vega": vega,
                 "theta": theta,
+                "post_hedge_delta": post_hedge_delta,
             }
         )
+
+    def update_last_daily_greeks_post_hedge(self, post_hedge_delta: float):
+        """Update the last daily_greeks entry with post-hedge delta after hedging."""
+        if self.daily_greeks:
+            self.daily_greeks[-1]["post_hedge_delta"] = post_hedge_delta
 
     def close_position(
         self,
