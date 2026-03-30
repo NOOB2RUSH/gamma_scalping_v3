@@ -57,6 +57,61 @@ class DailyProcessor:
         )
         return iv
 
+    def _compute_iv_for_position(self, date: str, strike: float, dte: int) -> float:
+        """
+        计算指定strike和DTE的隐含波动率。
+        用于Greeks计算，确保IV与Position参数一致。
+
+        Args:
+            date: 交易日期
+            strike: 期权strike价格
+            dte: 到期天数(days to expiry)
+
+        Returns:
+            隐含波动率，如果计算失败返回0.0
+        """
+        options = self.data_interface.get_options(date)
+        if options.empty:
+            return 0.0
+
+        s = float(self.data_interface.get_underlying_price(date))
+        t = max(dte, 1) / 252.0
+        if t <= 0:
+            return 0.0
+
+        # 找到对应strike的Call期权
+        strike_opts = options[
+            (options["strike_price"] == strike) & (options["option_type"] == "C")
+        ]
+        if strike_opts.empty:
+            return 0.0
+
+        # 选择DTE最接近目标的期权
+        strike_opts = strike_opts.copy()
+        strike_opts["opt_dte"] = (
+            pd.to_datetime(strike_opts["maturity_date"]) - pd.to_datetime(date)
+        ).dt.days
+        strike_opts = strike_opts[strike_opts["opt_dte"] >= 1]
+        if strike_opts.empty:
+            return 0.0
+
+        strike_opts["dte_diff"] = abs(strike_opts["opt_dte"] - dte)
+        closest = strike_opts.nsmallest(1, "dte_diff")
+
+        market_price = float((closest["bid"].values[0] + closest["ask"].values[0]) / 2)
+        if market_price <= 0:
+            return 0.0
+
+        iv = implied_volatility(
+            market_price=market_price,
+            s=s,
+            k=strike,
+            t=t,
+            r=self.config.risk_free_rate,
+            option_type="C",
+        )
+        return iv if iv > 0 else 0.0
+
     def _accumulate_iv(self, date: str, iv: float, dte: int):
         new_row = pd.DataFrame({"date": [date], "dte": [dte], "iv": [iv]})
         if self._iv_history.empty:
@@ -194,9 +249,7 @@ class DailyProcessor:
                 s = underlying
                 dte = (pd.to_datetime(maturity) - pd.to_datetime(date)).days
                 t = max(dte, 1) / 252.0
-                call_iv = self._compute_current_iv(
-                    date, self.data_interface.get_options(date)
-                )
+                call_iv = self._compute_iv_for_position(date, strike, dte)
                 if call_iv <= 0:
                     call_iv = 0.20
                 put_iv = call_iv
@@ -250,8 +303,7 @@ class DailyProcessor:
             t_raw = dte
             t = max(t_raw, 1) / 252.0
 
-            call_opt_for_iv = self.data_interface.get_options(date)
-            call_iv = self._compute_current_iv(date, call_opt_for_iv)
+            call_iv = self._compute_iv_for_position(date, strike, t_raw)
             if call_iv <= 0:
                 call_iv = 0.20
             put_iv = call_iv
@@ -360,8 +412,7 @@ class DailyProcessor:
             t_raw = dte
             t = max(t_raw, 1) / 252.0
 
-            call_opt_for_iv = self.data_interface.get_options(date)
-            call_iv = self._compute_current_iv(date, call_opt_for_iv)
+            call_iv = self._compute_iv_for_position(date, strike, t_raw)
             if call_iv <= 0:
                 call_iv = 0.20
             put_iv = call_iv
