@@ -2,6 +2,32 @@ class GreeksPnlAnalyzer:
     def __init__(self):
         self.positions: list[dict] = []
 
+    def _get_net_hedge_qty_on_date(self, hedge_records: list[dict], date: str) -> float:
+        """Compute the net hedge quantity that was in effect on a given date.
+
+        Sums all hedge qty where hedge date <= date and hedge is still open
+        (exit_date is None or exit_date > date).
+        """
+        net_qty = 0.0
+        for rec in hedge_records:
+            hedge_date = rec.get("date")
+            exit_date = rec.get("exit_date")
+            qty = rec.get("qty", 0)
+
+            # Hedge was added on or before this date
+            if hedge_date and hedge_date <= date:
+                # Hedge is still open if no exit_date or exit_date is after this date
+                if exit_date is None or exit_date > date:
+                    net_qty += qty
+        return net_qty
+
+    def _get_post_hedge_delta(
+        self, delta: float, hedge_records: list[dict], date: str
+    ) -> float:
+        """Compute post-hedge delta = pre-hedge delta + net_hedge_qty."""
+        net_hedge_qty = self._get_net_hedge_qty_on_date(hedge_records, date)
+        return delta + net_hedge_qty
+
     def compute_delta_pnl(
         self, greeks_records: list[dict], ds_underlying: float
     ) -> float:
@@ -89,6 +115,9 @@ class GreeksPnlAnalyzer:
         vega_pnl = 0.0
         dt = 1.0 / 252.0
 
+        # Get hedge_records from position for computing post-hedge delta
+        hedge_records = getattr(position, "hedge_records", [])
+
         for i in range(len(daily_greeks) - 1):
             date_i = daily_greeks[i]["date"]
             date_ip1 = daily_greeks[i + 1]["date"]
@@ -98,10 +127,16 @@ class GreeksPnlAnalyzer:
             s_ip1 = underlying_prices.get(date_ip1, s_i)
             ds = s_ip1 - s_i
 
-            # Stored greeks are BLACK-SCHOLES greeks for LONG straddle (we bought options).
-            # Use directly - no negation needed.
-            delta_i = daily_greeks[i].get("delta", 0.0)
-            delta_ip1 = daily_greeks[i + 1].get("delta", 0.0)
+            # Compute post-hedge delta from hedge_records
+            # This gives delta_pnl ≈ 0 after full hedging, as expected
+            delta_i = self._get_post_hedge_delta(
+                daily_greeks[i].get("delta", 0.0), hedge_records, date_i
+            )
+            delta_ip1 = self._get_post_hedge_delta(
+                daily_greeks[i + 1].get("delta", 0.0), hedge_records, date_ip1
+            )
+
+            # Gamma, theta, vega always use pre-hedge values (they represent theoretical Greek exposure)
             gamma_i = daily_greeks[i].get("gamma", 0.0)
             gamma_ip1 = daily_greeks[i + 1].get("gamma", 0.0)
             theta_i = daily_greeks[i].get("theta", 0.0)
@@ -110,6 +145,7 @@ class GreeksPnlAnalyzer:
             vega_ip1 = daily_greeks[i + 1].get("vega", 0.0)
 
             # Delta P&L: (Δ_i + Δ_{i+1}) / 2 × (S_{i+1} - S_i)
+            # Using post-hedge delta so that delta_pnl ≈ 0 after hedging
             delta_pnl += (delta_i + delta_ip1) / 2.0 * ds
 
             # Gamma P&L: 1/4 × (Γ_i + Γ_{i+1}) × (S_{i+1} - S_i)²  (design doc Sec 6.5)
@@ -163,6 +199,9 @@ class GreeksPnlAnalyzer:
         dt = 1.0 / 252.0
         interval_results = []
 
+        # Get hedge_records from position for computing post-hedge delta
+        hedge_records = getattr(position, "hedge_records", [])
+
         for i in range(len(daily_greeks) - 1):
             date_i = daily_greeks[i]["date"]
             date_ip1 = daily_greeks[i + 1]["date"]
@@ -172,10 +211,16 @@ class GreeksPnlAnalyzer:
             s_ip1 = underlying_prices.get(date_ip1, s_i)
             ds = s_ip1 - s_i
 
-            # Stored greeks are BLACK-SCHOLES greeks for LONG straddle (we bought options).
-            # Use directly - no negation needed.
-            delta_i = daily_greeks[i].get("delta", 0.0)
-            delta_ip1 = daily_greeks[i + 1].get("delta", 0.0)
+            # Compute post-hedge delta from hedge_records
+            # This gives delta_pnl ≈ 0 after full hedging, as expected
+            delta_i = self._get_post_hedge_delta(
+                daily_greeks[i].get("delta", 0.0), hedge_records, date_i
+            )
+            delta_ip1 = self._get_post_hedge_delta(
+                daily_greeks[i + 1].get("delta", 0.0), hedge_records, date_ip1
+            )
+
+            # Gamma, theta, vega always use pre-hedge values
             gamma_i = daily_greeks[i].get("gamma", 0.0)
             gamma_ip1 = daily_greeks[i + 1].get("gamma", 0.0)
             theta_i = daily_greeks[i].get("theta", 0.0)
@@ -184,6 +229,7 @@ class GreeksPnlAnalyzer:
             vega_ip1 = daily_greeks[i + 1].get("vega", 0.0)
 
             # Delta P&L: (Δ_i + Δ_{i+1}) / 2 × (S_{i+1} - S_i)
+            # Using post-hedge delta so that delta_pnl ≈ 0 after hedging
             delta_pnl = (delta_i + delta_ip1) / 2.0 * ds
 
             # Gamma P&L: 1/4 × (Γ_i + Γ_{i+1}) × (S_{i+1} - S_i)²

@@ -44,18 +44,42 @@ class Portfolio:
     ) -> float:
         pos = self.positions[trade_id]
         open_cost = pos.open_cost
-        if underlying_close_price is not None and pos.hedge_records:
-            hedge_pnl = 0.0
-            for rec in pos.hedge_records:
+
+        hedge_pnl = 0.0
+
+        for rec in pos.hedge_records:
+            if rec.get("realized_pnl") is not None:
+                # Use pre-computed realized PnL from close_current_hedge()
+                # (transaction costs already deducted in realized_pnl)
+                hedge_pnl += rec["realized_pnl"]
+            elif rec.get("exit_date") is not None and rec.get("exit_price") is not None:
+                # Fallback: hedge was closed but realized_pnl not set
                 qty = rec["qty"]
                 entry_price = rec["price"]
-                # PnL = qty * (close_price - entry_price), then subtract transaction costs
-                # For qty > 0 (buy): cost was added when opening
-                # For qty < 0 (short sell): cost was subtracted when opening
-                hedge_pnl += qty * (underlying_close_price - entry_price)
-            hedge_pnl -= pos.hedge_cost
-        else:
-            hedge_pnl = 0.0
+                exit_price = rec["exit_price"]
+                hedge_pnl += qty * (exit_price - entry_price)
+            elif underlying_close_price is not None:
+                # Final close: close any open hedge at position close price
+                # No slippage (entry has it baked in), but deduct transaction costs
+                qty = rec["qty"]
+                entry_price = rec["price"]
+                pnl = qty * (underlying_close_price - entry_price)
+                # Deduct transaction costs for this close
+                notional = abs(qty) * underlying_close_price
+                commission = max(notional * 0.0005, 5.0)  # default values
+                handling = notional * 0.0001
+                pnl -= commission + handling
+                hedge_pnl += pnl
+                pos.hedge_cost += commission + handling
+            # else: hedge still open but no underlying_close_price (shouldn't happen)
+
+        # Subtract only hedge OPENING costs (closing costs already deducted in realized_pnl)
+        if pos.hedge_records:
+            hedge_pnl -= pos.hedge_opening_cost
+
+        # Reset net_hedge_qty since all hedges should be closed now
+        pos.net_hedge_qty = 0.0
+
         pos.close_position(
             close_date, close_proceeds, hedge_pnl, underlying_close_price
         )

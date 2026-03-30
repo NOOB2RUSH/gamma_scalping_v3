@@ -2,6 +2,7 @@ import csv
 import os
 from pathlib import Path
 
+import pandas as pd
 import yaml
 
 
@@ -117,13 +118,25 @@ class ResultWriter:
             writer.writeheader()
             writer.writerows(rows)
 
-    def write_iv_history(self, iv_history: dict[str, float]):
+    def write_iv_history(self, iv_history_df: pd.DataFrame):
+        """Write IV history to CSV with columns: date, dte, iv.
+        
+        Args:
+            iv_history_df: DataFrame with columns [date, dte, iv]
+        """
         path = self.results_dir / "iv_history.csv"
-        rows = [{"date": d, "atm_iv": iv} for d, iv in sorted(iv_history.items())]
-        with open(path, "w", newline="") as f:
-            writer = csv.DictWriter(f, fieldnames=["date", "atm_iv"])
-            writer.writeheader()
-            writer.writerows(rows)
+        if iv_history_df is None or iv_history_df.empty:
+            # Create empty CSV with correct columns
+            df = pd.DataFrame(columns=["date", "dte", "iv"])
+        elif "date" in iv_history_df.columns and "dte" in iv_history_df.columns and "iv" in iv_history_df.columns:
+            df = iv_history_df[["date", "dte", "iv"]].sort_values("date")
+        else:
+            # Legacy format: dict[str, float] passed directly
+            # Convert to DataFrame
+            df = pd.DataFrame(list(iv_history_df.items()), columns=["date", "iv"])
+            df["dte"] = 30  # Default DTE for legacy format
+            df = df[["date", "dte", "iv"]]
+        df.to_csv(path, index=False)
 
     def write_daily_debug_log(self, date: str, debug_lines: list[str]):
         log_path = self.results_dir / "logs" / "daily_debug.log"

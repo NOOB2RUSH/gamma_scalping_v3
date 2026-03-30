@@ -7,6 +7,7 @@ from backtest.processor import DailyProcessor
 from backtest.writer import ResultWriter
 from analysis.performance import PerformanceAnalyzer
 from analysis.greeks_pnl import GreeksPnlAnalyzer
+from core.greeks import implied_volatility
 
 
 class BacktestEngine:
@@ -56,22 +57,32 @@ class BacktestEngine:
                 min_price=self.config.min_option_price,
             )
             if call_opt is not None:
-                iv_history_df = pd.concat(
-                    [
-                        iv_history_df,
-                        pd.DataFrame(
+                # Compute model-implied IV from market price
+                s = float(self.data_interface.get_underlying_price(date))
+                k = float(call_opt["strike_price"])
+                market_price = float((call_opt["bid"] + call_opt["ask"]) / 2)
+                opt_date = datetime.strptime(date, "%Y-%m-%d")
+                mat_date = datetime.strptime(call_opt["maturity_date"], "%Y-%m-%d")
+                dte = (mat_date - opt_date).days
+                t = max(dte, 1) / 252.0
+
+                if market_price > 0 and t > 0:
+                    iv = implied_volatility(
+                        market_price=market_price,
+                        s=s,
+                        k=k,
+                        t=t,
+                        r=self.config.risk_free_rate,
+                        option_type="C",
+                    )
+                    if iv > 0:
+                        iv_history_df = pd.concat(
                             [
-                                {
-                                    "date": date,
-                                    "atm_iv": call_opt.get("close", 0)
-                                    if "iv" not in call_opt
-                                    else call_opt.get("iv", 0),
-                                }
-                            ]
-                        ),
-                    ],
-                    ignore_index=True,
-                )
+                                iv_history_df,
+                                pd.DataFrame([{"date": date, "dte": dte, "iv": iv}]),
+                            ],
+                            ignore_index=True,
+                        )
 
             prev_equity = (
                 self.results["equity_curve"][-1]["equity"]
@@ -108,14 +119,14 @@ class BacktestEngine:
                 pos.trade_id, last_date, close_proceeds, last_underlying
             )
 
-        # Convert iv_history DataFrame to dict
+        # Convert iv_history DataFrame to dict for Greeks P&L
         iv_history: dict[str, float] = {}
         if not iv_history_df.empty:
-            iv_history = dict(zip(iv_history_df["date"], iv_history_df["atm_iv"]))
+            iv_history = dict(zip(iv_history_df["date"], iv_history_df["iv"]))
 
-        # Persist underlying prices and IV history
+        # Persist underlying prices and IV history (DataFrame with date, dte, iv)
         self.writer.write_underlying_prices(underlying_prices)
-        self.writer.write_iv_history(iv_history)
+        self.writer.write_iv_history(iv_history_df)
 
         # Analyze Greeks P&L for all closed positions
         greeks_by_date: dict[str, dict] = {}
