@@ -56,6 +56,15 @@ class ResultWriter:
             "avg_loss",
             "trading_days",
             "annualized_profit",
+            # Greeks P&L 分解
+            "greeks_delta_pnl",
+            "greeks_gamma_pnl",
+            "greeks_theta_pnl",
+            "greeks_vega_pnl",
+            "greeks_total_pnl",
+            # Greeks P&L vs 实际 P&L
+            "greeks_vs_pnl_diff",
+            "greeks_vs_pnl_pct",
         ]
 
     def write_equity_curve(self, equity_curve: list[dict]):

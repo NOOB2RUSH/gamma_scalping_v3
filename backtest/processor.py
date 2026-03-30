@@ -6,7 +6,10 @@ from core.signal import check_open_signals, check_close_signals, should_hedge
 from core.hedge import hedge_delta_to_zero
 from core.greeks import black_scholes_greeks, implied_volatility
 from core.vol_cone import current_iv_percentile
+import logging
 import pandas as pd
+
+logger = logging.getLogger(__name__)
 
 
 class DailyProcessor:
@@ -72,11 +75,17 @@ class DailyProcessor:
         """
         options = self.data_interface.get_options(date)
         if options.empty:
+            logger.warning(
+                f"IV calc failed: no options data for date={date}, strike={strike}, dte={dte}"
+            )
             return 0.0
 
         s = float(self.data_interface.get_underlying_price(date))
         t = max(dte, 1) / 252.0
         if t <= 0:
+            logger.warning(
+                f"IV calc failed: invalid t={t} for date={date}, strike={strike}, dte={dte}"
+            )
             return 0.0
 
         # 找到对应strike的Call期权
@@ -84,6 +93,9 @@ class DailyProcessor:
             (options["strike_price"] == strike) & (options["option_type"] == "C")
         ]
         if strike_opts.empty:
+            logger.warning(
+                f"IV calc failed: no call option for strike={strike}, date={date}, dte={dte}"
+            )
             return 0.0
 
         # 选择DTE最接近目标的期权
@@ -93,6 +105,9 @@ class DailyProcessor:
         ).dt.days
         strike_opts = strike_opts[strike_opts["opt_dte"] >= 1]
         if strike_opts.empty:
+            logger.warning(
+                f"IV calc failed: no valid DTE for strike={strike}, target_dte={dte}, date={date}"
+            )
             return 0.0
 
         strike_opts["dte_diff"] = abs(strike_opts["opt_dte"] - dte)
@@ -100,6 +115,9 @@ class DailyProcessor:
 
         market_price = float((closest["bid"].values[0] + closest["ask"].values[0]) / 2)
         if market_price <= 0:
+            logger.warning(
+                f"IV calc failed: invalid market_price={market_price}, strike={strike}, dte={dte}"
+            )
             return 0.0
 
         iv = implied_volatility(
@@ -110,7 +128,12 @@ class DailyProcessor:
             r=self.config.risk_free_rate,
             option_type="C",
         )
-        return iv if iv > 0 else 0.0
+        if iv <= 0:
+            logger.warning(
+                f"IV calc failed: implied_volatility returned {iv}, strike={strike}, dte={dte}"
+            )
+            return 0.0
+        return iv
 
     def _accumulate_iv(self, date: str, iv: float, dte: int):
         new_row = pd.DataFrame({"date": [date], "dte": [dte], "iv": [iv]})
@@ -251,6 +274,10 @@ class DailyProcessor:
                 t = max(dte, 1) / 252.0
                 call_iv = self._compute_iv_for_position(date, strike, dte)
                 if call_iv <= 0:
+                    logger.warning(
+                        f"IV fallback: pos_id={pos.trade_id} date={date} strike={strike} "
+                        f"dte={dte} falling back to 0.20"
+                    )
                     call_iv = 0.20
                 put_iv = call_iv
                 if t > 0:
@@ -305,6 +332,10 @@ class DailyProcessor:
 
             call_iv = self._compute_iv_for_position(date, strike, t_raw)
             if call_iv <= 0:
+                logger.warning(
+                    f"IV fallback: pos_id={pos.trade_id} date={date} strike={strike} "
+                    f"dte={t_raw} falling back to 0.20"
+                )
                 call_iv = 0.20
             put_iv = call_iv
 
@@ -414,6 +445,10 @@ class DailyProcessor:
 
             call_iv = self._compute_iv_for_position(date, strike, t_raw)
             if call_iv <= 0:
+                logger.warning(
+                    f"IV fallback: pos_id={pos.trade_id} date={date} strike={strike} "
+                    f"dte={t_raw} falling back to 0.20"
+                )
                 call_iv = 0.20
             put_iv = call_iv
 
