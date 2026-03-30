@@ -238,6 +238,30 @@ def print_summary(results: dict, elapsed: float, results_dir: Path):
         f"║  Final Equity {end_equity:>12,.0f}  ({end_equity - start_equity:>+,.0f})     ║"
     )
 
+    # Greeks P&L 分解
+    greeks_delta = summary.get("greeks_delta_pnl", 0.0)
+    greeks_gamma = summary.get("greeks_gamma_pnl", 0.0)
+    greeks_theta = summary.get("greeks_theta_pnl", 0.0)
+    greeks_vega = summary.get("greeks_vega_pnl", 0.0)
+    greeks_total = summary.get("greeks_total_pnl", 0.0)
+    greeks_diff = summary.get("greeks_vs_pnl_diff", 0.0)
+    greeks_pct = summary.get("greeks_vs_pnl_pct", 0.0)
+
+    print("╠══════════════════════════════════════════════════════════════╣")
+    print("║                    GREEKS P&L 分解                          ║")
+    print("╠══════════════════════════════════════════════════════════════╣")
+    print(
+        f"║  Delta P&L   {greeks_delta:>12,.0f}   Theta P&L  {greeks_theta:>10,.0f}     ║"
+    )
+    print(
+        f"║  Gamma P&L   {greeks_gamma:>12,.0f}   Vega P&L   {greeks_vega:>10,.0f}     ║"
+    )
+    print(f"║  Greeks Total{greeks_total:>12,.0f}                             ║")
+    print("╠══════════════════════════════════════════════════════════════╣")
+    print(
+        f"║  Greeks vs Actual: {greeks_diff:>+9,.0f}  (差异 {greeks_pct:>5.1f}%)        ║"
+    )
+
     print("╚══════════════════════════════════════════════════════════════╝")
 
     print()

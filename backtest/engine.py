@@ -146,7 +146,7 @@ class BacktestEngine:
             if p.is_closed
         ]
         analyzer.equity_curve = self.results["equity_curve"]
-        self.results["summary"] = analyzer.compute_summary()
+        self.results["summary"] = analyzer.compute_summary(greeks_by_date)
         self.results["equity_stats"] = analyzer.compute_equity_curve_stats()
         self.results["greeks_by_date"] = greeks_by_date
 
