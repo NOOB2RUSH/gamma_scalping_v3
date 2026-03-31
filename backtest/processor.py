@@ -29,38 +29,82 @@ class DailyProcessor:
     def _compute_current_iv(self, date: str, options: pd.DataFrame) -> float:
         if options.empty:
             return 0.0
+
+        # Check for required market data columns
+        if "bid" not in options.columns or "ask" not in options.columns:
+            return 0.0
+
         s = float(self.data_interface.get_underlying_price(date))
         calls = options[options["option_type"] == "C"]
-        if calls.empty:
+        puts = options[options["option_type"] == "P"]
+        if calls.empty or puts.empty:
             return 0.0
+
         calls = calls.copy()
         calls["dte"] = (
             pd.to_datetime(calls["maturity_date"]) - pd.to_datetime(date)
         ).dt.days
-        valid = calls[calls["dte"] >= 7]
-        if valid.empty:
+        valid_calls = calls[calls["dte"] >= self.config.min_dte]
+        if valid_calls.empty:
             return 0.0
-        valid = valid.copy()
-        valid["moneyness"] = valid["strike_price"].values / s
-        idx = valid["moneyness"].sub(1).abs().idxmin()
-        row = valid.loc[idx]
-        k = float(row["strike_price"])
-        market_price = float((row["bid"] + row["ask"]) / 2)
-        dte = int(row["dte"])
-        if market_price <= 0 or dte <= 0:
+        valid_calls = valid_calls.copy()
+        valid_calls["moneyness"] = valid_calls["strike_price"].values / s
+        idx_call = valid_calls["moneyness"].sub(1).abs().idxmin()
+        row_call = valid_calls.loc[idx_call]
+        k = float(row_call["strike_price"])
+        dte = int(row_call["dte"])
+
+        puts = puts.copy()
+        puts["dte"] = (
+            pd.to_datetime(puts["maturity_date"]) - pd.to_datetime(date)
+        ).dt.days
+        valid_puts = puts[puts["dte"] >= self.config.min_dte]
+        if valid_puts.empty:
+            return 0.0
+        valid_puts = valid_puts.copy()
+        valid_puts["moneyness"] = valid_puts["strike_price"].values / s
+        idx_put = valid_puts["moneyness"].sub(1).abs().idxmin()
+        row_put = valid_puts.loc[idx_put]
+
+        if dte <= 0:
             return 0.0
         t = dte / 252.0
-        iv = implied_volatility(
-            market_price=market_price,
-            s=s,
-            k=k,
-            t=t,
-            r=self.config.risk_free_rate,
-            option_type="C",
-        )
-        return iv
 
-    def _compute_iv_for_position(self, date: str, strike: float, dte: int) -> float:
+        call_market_price = float((row_call["bid"] + row_call["ask"]) / 2)
+        call_iv = 0.0
+        if call_market_price > 0:
+            call_iv = implied_volatility(
+                market_price=call_market_price,
+                s=s,
+                k=k,
+                t=t,
+                r=self.config.risk_free_rate,
+                option_type="C",
+            )
+
+        put_market_price = float((row_put["bid"] + row_put["ask"]) / 2)
+        put_iv = 0.0
+        if put_market_price > 0:
+            put_iv = implied_volatility(
+                market_price=put_market_price,
+                s=s,
+                k=k,
+                t=t,
+                r=self.config.risk_free_rate,
+                option_type="P",
+            )
+
+        if call_iv > 0 and put_iv > 0:
+            return (call_iv + put_iv) / 2.0
+        elif call_iv > 0:
+            return call_iv
+        elif put_iv > 0:
+            return put_iv
+        return 0.0
+
+    def _compute_iv_for_position(
+        self, date: str, strike: float, dte: int, option_type: str = "C"
+    ) -> float:
         """
         计算指定strike和DTE的隐含波动率。
         用于Greeks计算，确保IV与Position参数一致。
@@ -69,6 +113,7 @@ class DailyProcessor:
             date: 交易日期
             strike: 期权strike价格
             dte: 到期天数(days to expiry)
+            option_type: 期权类型，"C" for Call, "P" for Put
 
         Returns:
             隐含波动率，如果计算失败返回0.0
@@ -88,13 +133,14 @@ class DailyProcessor:
             )
             return 0.0
 
-        # 找到对应strike的Call期权
+        # 找到对应strike的期权
         strike_opts = options[
-            (options["strike_price"] == strike) & (options["option_type"] == "C")
+            (options["strike_price"] == strike)
+            & (options["option_type"] == option_type)
         ]
         if strike_opts.empty:
             logger.warning(
-                f"IV calc failed: no call option for strike={strike}, date={date}, dte={dte}"
+                f"IV calc failed: no {option_type} option for strike={strike}, date={date}, dte={dte}"
             )
             return 0.0
 
@@ -126,7 +172,7 @@ class DailyProcessor:
             k=strike,
             t=t,
             r=self.config.risk_free_rate,
-            option_type="C",
+            option_type=option_type,
         )
         if iv <= 0:
             logger.warning(
@@ -134,6 +180,25 @@ class DailyProcessor:
             )
             return 0.0
         return iv
+
+    def _compute_avg_iv(self, date: str, strike: float, dte: int) -> float:
+        """
+        计算call和put隐含波动率的平均值。
+        用于Greeks计算，确保IV与Position参数一致。
+
+        Args:
+            date: 交易日期
+            strike: 期权strike价格
+            dte: 到期天数(days to expiry)
+
+        Returns:
+            call和put隐含波动率的平均值，如果计算失败返回0.0
+        """
+        call_iv = self._compute_iv_for_position(date, strike, dte, "C")
+        put_iv = self._compute_iv_for_position(date, strike, dte, "P")
+        if call_iv <= 0 or put_iv <= 0:
+            return 0.0
+        return (call_iv + put_iv) / 2.0
 
     def _accumulate_iv(self, date: str, iv: float, dte: int):
         new_row = pd.DataFrame({"date": [date], "dte": [dte], "iv": [iv]})
@@ -188,7 +253,7 @@ class DailyProcessor:
 
         result["iv_percentile"] = iv_percentile
 
-        if iv_percentile is None:
+        if iv_percentile is None or current_iv == 0.0:
             return result
 
         atm_call_opt, atm_put_opt = self.data_interface.get_atm_options(
@@ -196,7 +261,8 @@ class DailyProcessor:
             moneyness_range=self.config.moneyness_range,
             min_dte=self.config.min_dte,
             min_volume=self.config.min_volume,
-            min_price=self.config.min_option_price,
+            risk_free_rate=self.config.risk_free_rate,
+            max_call_put_iv_diff=self.config.max_call_put_iv_diff,
         )
 
         if atm_call_opt is not None and atm_put_opt is not None:
@@ -223,8 +289,8 @@ class DailyProcessor:
                 call_ask = float(atm_call_opt["ask"])
                 put_ask = float(atm_put_opt["ask"])
 
-                call_price = call_ask * (1 - self.config.option_slippage)
-                put_price = put_ask * (1 - self.config.option_slippage)
+                call_price = call_ask * (1 + self.config.option_slippage)
+                put_price = put_ask * (1 + self.config.option_slippage)
 
                 call_notional = call_price * 10000
                 put_notional = put_price * 10000
@@ -272,14 +338,15 @@ class DailyProcessor:
                 s = underlying
                 dte = (pd.to_datetime(maturity) - pd.to_datetime(date)).days
                 t = max(dte, 1) / 252.0
-                call_iv = self._compute_iv_for_position(date, strike, dte)
-                if call_iv <= 0:
+                avg_iv = self._compute_avg_iv(date, strike, dte)
+                if avg_iv <= 0:
                     logger.warning(
                         f"IV fallback: pos_id={pos.trade_id} date={date} strike={strike} "
                         f"dte={dte} falling back to 0.20"
                     )
-                    call_iv = 0.20
-                put_iv = call_iv
+                    avg_iv = 0.20
+                call_iv = avg_iv
+                put_iv = avg_iv
                 if t > 0:
                     call_greeks = black_scholes_greeks(
                         s, strike, t, self.config.risk_free_rate, call_iv, "C"
@@ -303,7 +370,8 @@ class DailyProcessor:
                 moneyness_range=self.config.moneyness_range,
                 min_dte=self.config.min_dte,
                 min_volume=self.config.min_volume,
-                min_price=self.config.min_option_price,
+                risk_free_rate=self.config.risk_free_rate,
+                max_call_put_iv_diff=self.config.max_call_put_iv_diff,
             )
             if atm_c is None or atm_p is None:
                 continue
@@ -330,14 +398,15 @@ class DailyProcessor:
             t_raw = dte
             t = max(t_raw, 1) / 252.0
 
-            call_iv = self._compute_iv_for_position(date, strike, t_raw)
-            if call_iv <= 0:
+            avg_iv = self._compute_avg_iv(date, strike, t_raw)
+            if avg_iv <= 0:
                 logger.warning(
                     f"IV fallback: pos_id={pos.trade_id} date={date} strike={strike} "
                     f"dte={t_raw} falling back to 0.20"
                 )
-                call_iv = 0.20
-            put_iv = call_iv
+                avg_iv = 0.20
+            call_iv = avg_iv
+            put_iv = avg_iv
 
             pos_delta = 0.0
             pos_gamma = 0.0
@@ -406,8 +475,14 @@ class DailyProcessor:
                     continue
 
             # First hedge block - hedge existing positions (on non-open dates)
-            # FIX: Removed "date != pos.open_date" to allow hedging on open date
-            if should_hedge(abs(pos_delta), self.config.delta_hedge_threshold):
+            # Opening and closing days: do NOT hedge (design doc Sec 5.4)
+            # Use net_delta (pos_delta + net_hedge_qty) for hedge decision
+            net_delta = pos_delta + pos.net_hedge_qty
+            if (
+                date != pos.open_date
+                and date != pos.close_date
+                and should_hedge(abs(net_delta), self.config.delta_hedge_threshold)
+            ):
                 # If there's an existing open hedge, close it first
                 if pos.hedge_records and pos.hedge_records[-1].get("exit_date") is None:
                     pos.close_current_hedge(

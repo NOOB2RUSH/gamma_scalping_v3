@@ -11,7 +11,7 @@ def test_default_config_values():
     assert cfg.close_dte_threshold == 5
     assert cfg.max_holding_days == 30
     assert cfg.delta_hedge_threshold == 0.05
-    assert cfg.moneyness_range == (0.95, 1.05)
+    assert cfg.moneyness_range == (0.98, 1.02)
     assert cfg.target_tenor == 30
     assert cfg.min_dte == 7
     assert cfg.min_option_price == 0.001

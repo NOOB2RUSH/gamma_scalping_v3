@@ -11,6 +11,8 @@ from core.greeks import implied_volatility
 
 
 class BacktestEngine:
+    MIN_START_DATE = "2024-12-16"
+
     def __init__(self, config: Config, data_interface, results_dir: str | None = None):
         self.config = config
         self.data_interface = data_interface
@@ -49,33 +51,56 @@ class BacktestEngine:
             except (FileNotFoundError, KeyError, OSError, EOFError):
                 continue
 
+            if date < self.MIN_START_DATE:
+                continue
+
             call_opt, put_opt = self.data_interface.get_atm_options(
                 date,
                 moneyness_range=self.config.moneyness_range,
                 min_dte=self.config.min_dte,
                 min_volume=self.config.min_volume,
-                min_price=self.config.min_option_price,
+                risk_free_rate=self.config.risk_free_rate,
+                max_call_put_iv_diff=self.config.max_call_put_iv_diff,
             )
-            if call_opt is not None:
-                # Compute model-implied IV from market price
+            if call_opt is not None and put_opt is not None:
+                # Compute model-implied IV from market price using Call+Put average
                 s = float(self.data_interface.get_underlying_price(date))
                 k = float(call_opt["strike_price"])
-                market_price = float((call_opt["bid"] + call_opt["ask"]) / 2)
                 opt_date = datetime.strptime(date, "%Y-%m-%d")
                 mat_date = datetime.strptime(call_opt["maturity_date"], "%Y-%m-%d")
                 dte = (mat_date - opt_date).days
                 t = max(dte, 1) / 252.0
 
-                if market_price > 0 and t > 0:
-                    iv = implied_volatility(
-                        market_price=market_price,
-                        s=s,
-                        k=k,
-                        t=t,
-                        r=self.config.risk_free_rate,
-                        option_type="C",
-                    )
-                    if iv > 0:
+                if t > 0:
+                    # Compute Call IV
+                    call_market_price = float((call_opt["bid"] + call_opt["ask"]) / 2)
+                    call_iv = 0.0
+                    if call_market_price > 0:
+                        call_iv = implied_volatility(
+                            market_price=call_market_price,
+                            s=s,
+                            k=k,
+                            t=t,
+                            r=self.config.risk_free_rate,
+                            option_type="C",
+                        )
+
+                    # Compute Put IV
+                    put_market_price = float((put_opt["bid"] + put_opt["ask"]) / 2)
+                    put_iv = 0.0
+                    if put_market_price > 0:
+                        put_iv = implied_volatility(
+                            market_price=put_market_price,
+                            s=s,
+                            k=k,
+                            t=t,
+                            r=self.config.risk_free_rate,
+                            option_type="P",
+                        )
+
+                    # Average Call and Put IV
+                    if call_iv > 0 and put_iv > 0:
+                        iv = (call_iv + put_iv) / 2.0
                         iv_history_df = pd.concat(
                             [
                                 iv_history_df,

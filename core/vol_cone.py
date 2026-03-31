@@ -6,11 +6,13 @@ from typing import Optional
 TENOR_BUCKETS = [
     (7, 5, 9),
     (14, 10, 18),
+    (21, 16, 25),
     (30, 22, 37),
+    (45, 38, 55),
     (60, 45, 75),
-    (90, 75, 105),
+    (90, 76, 105),
 ]
-PERCENTILES = [100, 90, 85, 80, 75, 50, 25, 20, 15, 10, 0]
+PERCENTILES = [0, 15, 30, 50, 70, 85, 100]
 MIN_LOOKBACK_DAYS = 60
 
 
@@ -69,7 +71,7 @@ def current_iv_percentile(
     current_dt = pd.to_datetime(trade_date)
     iv_history = iv_history.copy()
     iv_history["date"] = pd.to_datetime(iv_history["date"])
-    past = iv_history[iv_history["date"] < current_dt].tail(lookback_days)
+    past = iv_history[iv_history["date"] <= current_dt].tail(lookback_days)
     if len(past) < MIN_LOOKBACK_DAYS:
         return None
 

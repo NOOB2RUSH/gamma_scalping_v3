@@ -139,7 +139,8 @@ class Position:
         # Hedge daily cash flows are not recorded in portfolio.cash, so
         # including hedge_mtm in net_pnl would create a gap vs equity_change.
         # Hedge contribution is reported via hedge_pnl field separately.
-        self.net_pnl = self.option_pnl
+        hedge = getattr(self, "hedge_pnl", 0)
+        self.net_pnl = self.option_pnl + hedge
 
     def to_dict(self) -> dict:
         return {

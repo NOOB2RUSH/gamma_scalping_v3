@@ -4,15 +4,16 @@ from dataclasses import dataclass, fields
 @dataclass
 class Config:
     initial_capital: float = 100_000
-    lookback_days: int = 110
+    lookback_days: int = 120
     target_tenor: int = 30
     open_threshold: float = 0.15
-    close_threshold: float = 0.75
+    close_threshold: float = 0.85
     close_dte_threshold: int = 5
-    max_holding_days: int = 5
-    delta_hedge_threshold: float = 0.40
+    max_holding_days: int = 30
+    delta_hedge_threshold: float = 0.05
     moneyness_range: tuple[float, float] = (0.95, 1.05)
-    min_dte: int = 4
+    max_call_put_iv_diff: float = 0.40
+    min_dte: int = 7
     min_option_price: float = 0.001
     min_volume: int = 2000
     risk_free_rate: float = 0.025
